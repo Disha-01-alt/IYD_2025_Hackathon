@@ -1,0 +1,269 @@
+# dishasahu.py
+#
+# Final Submission for the IYD Hackathon 2025
+#
+# Description:
+# This script performs fact-checking on statements related to the Valmiki Ramayana.
+# It uses a Retrieval-Augmented Generation (RAG) pipeline.
+# 1. It downloads the necessary dataset, embeddings, and a Mistral-7B GGUF model
+#    from the 'dishasahu/ramayana-fact-checker-assets' Hugging Face repository.
+# 2. For each input statement, it retrieves the most relevant verses from the Ramayana
+#    using a FAISS vector index.
+# 3. It uses the retrieved verses as context for a Large Language Model (LLM) to
+#    determine if the statement is TRUE, FALSE, or NOT RELEVANT.
+# 4. The final predictions are saved to 'prediction_output.csv'.
+#
+# How to Run:
+# 1. Make sure you have an input CSV file (e.g., 'test_statements.csv') in the same
+#    directory. This file must have a column named "Statement".
+# 2. Run the script from your terminal:
+#    python dishasahu.py test_statements.csv
+
+# --- Import necessary libraries ---
+import pandas as pd
+import re
+from sentence_transformers import SentenceTransformer
+from llama_cpp import Llama
+import faiss
+import numpy as np
+import os
+import sys
+from tqdm import tqdm
+from huggingface_hub import hf_hub_download
+
+# --- Configuration ---
+# All parameters and file paths are centralized here for easy management.
+CONFIG = {
+    # --- Hugging Face Repository Details ---
+    "hf_repo_id": "dishasahu/ramayana-fact-checker-assets",
+
+    # --- Filenames (must match the names in the HF repo) ---
+    "ramayana_dataset_filename": "Valmiki_Ramayana_Dataset.csv",
+    "embeddings_cache_filename": "ramayana_verse_embeddings_mpnet.npy",
+    "gguf_model_filename": "mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+
+    # --- Model and System Settings ---
+    "embedding_model_name": 'sentence-transformers/all-mpnet-base-v2',
+    "relevance_score_threshold": 1.1,  # L2 distance; higher means less similar.
+
+    # --- CSV Column Names ---
+    "verse_column_name": 'English Translation',
+    "kanda_column": 'Kanda/Book',
+    "sarga_column": 'Sarga/Chapter',
+    "shloka_column": 'Shloka/Verse',
+
+    # --- Output file ---
+    "output_csv_path": "prediction_output.csv",
+
+    # --- Heuristics ---
+    "kanda_order": [
+        "Bala Kanda", "Baala Kanda", "Ayodhya Kanda", "Aranya Kanda",
+        "Kishkindha Kanda", "Kishkinda Kanda", "Sundara Kanda", "Yuddha Kanda"
+    ],
+    "stop_words": {
+        'a', 'about', 'above', 'after', 'again', 'against', 'all', 'am', 'an', 'and', 'any', 'are', 'as', 'at',
+        'be', 'because', 'been', 'before', 'being', 'below', 'between', 'both', 'but', 'by', 'can', 'did', 'do',
+        'does', 'doing', 'down', 'during', 'each', 'few', 'for', 'from', 'further', 'had', 'has', 'have',
+        'having', 'he', 'her', 'here', 'hers', 'herself', 'him', 'himself', 'his', 'how', 'i', 'if', 'in',
+        'into', 'is', 'it', 'its', 'itself', 'just', 'me', 'more', 'most', 'my', 'myself', 'no', 'nor', 'not',
+        'of', 'off', 'on', 'once', 'only', 'or', 'other', 'our', 'ours', 'ourselves', 'out', 'over', 'own', 's',
+        'same', 'she', 'should', 'so', 'some', 'such', 't', 'than', 'that', 'the', 'their', 'theirs', 'them',
+        'themselves', 'then', 'there', 'these', 'they', 'this', 'those', 'through', 'to', 'too', 'under',
+        'until', 'up', 'very', 'was', 'we', 'were', 'what', 'when', 'where', 'which', 'while', 'who', 'whom',
+        'why', 'will', 'with', 'you', 'your', 'yours', 'yourself', 'yourselves'
+    }
+}
+
+# --- Global Variables ---
+df = None
+valid_df = None
+verses = None
+embedder = None
+verse_embeddings_np = None
+index = None
+llm_model = None
+
+def download_from_hf_hub(repo_id, filename):
+    """Downloads a file from a Hugging Face Hub repo if it doesn't exist locally."""
+    if os.path.exists(filename):
+        print(f"File '{filename}' already exists. Skipping download.")
+        return
+    
+    print(f"Downloading '{filename}' from repo '{repo_id}'...")
+    try:
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_dir='.', # Download to the current directory
+            local_dir_use_symlinks=False,
+        )
+    except Exception as e:
+        print(f"FATAL: Could not download '{filename}' from repo '{repo_id}'. Error: {e}")
+        sys.exit(1)
+
+def setup_models_and_data():
+    """
+    Handles all one-time setup: downloading data/models from Hugging Face, loading
+    them into memory, and building the FAISS index.
+    """
+    global df, valid_df, verses, embedder, verse_embeddings_np, index, llm_model
+    print("--- 1. Setting up models and data ---")
+
+    # --- Download all required files from your Hugging Face repo ---
+    repo_id = CONFIG['hf_repo_id']
+    download_from_hf_hub(repo_id, CONFIG['ramayana_dataset_filename'])
+    download_from_hf_hub(repo_id, CONFIG['embeddings_cache_filename'])
+    download_from_hf_hub(repo_id, CONFIG['gguf_model_filename'])
+
+    # --- Load Ramayana dataset ---
+    print("\nLoading dataset and models...")
+    try:
+        df = pd.read_csv(CONFIG['ramayana_dataset_filename'])
+    except FileNotFoundError:
+        print(f"FATAL: CSV file not found at {CONFIG['ramayana_dataset_filename']}. Exiting."); sys.exit(1)
+
+    required_cols = [CONFIG['verse_column_name'], CONFIG['kanda_column'], CONFIG['sarga_column'], CONFIG['shloka_column']]
+    if not all(col in df.columns for col in required_cols):
+        print(f"FATAL: Input CSV must contain columns: {required_cols}. Exiting."); sys.exit(1)
+
+    valid_df = df[df[CONFIG['verse_column_name']].notna()].copy()
+    verses = valid_df[CONFIG['verse_column_name']].astype(str).tolist()
+    print(f"Loaded {len(verses)} verses from dataset.")
+
+    # --- Load SBERT and Embeddings ---
+    embedder = SentenceTransformer(CONFIG['embedding_model_name'])
+    
+    verse_embeddings_np = np.load(CONFIG['embeddings_cache_filename'])
+    if verse_embeddings_np.shape[0] != len(verses):
+        print("FATAL: Embeddings file does not match the number of verses. Please regenerate and re-upload.")
+        sys.exit(1)
+
+    # --- Build FAISS Index ---
+    dim = verse_embeddings_np.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(verse_embeddings_np)
+    print("FAISS index built.")
+
+    # --- Load GGUF LLM ---
+    llm_model = Llama(model_path=CONFIG['gguf_model_filename'], n_ctx=2048, n_gpu_layers=-1, verbose=False)
+    print("GGUF LLM loaded successfully.")
+    print("--- Setup Complete ---")
+
+def retrieve_top_verses(query: str, k_retrieval: int = 7) -> list:
+    """Uses FAISS to find the top k most similar verses for a given query."""
+    q_vec = embedder.encode([query], convert_to_numpy=True)
+    distances, indices = index.search(q_vec, k_retrieval)
+    results = []
+    for i in range(len(indices[0])):
+        faiss_idx = indices[0][i]
+        meta = valid_df.iloc[faiss_idx]
+        loc = f"{meta[CONFIG['kanda_column']]}, Sarga {meta[CONFIG['sarga_column']]}, Shloka {meta[CONFIG['shloka_column']]}"
+        results.append({"text": verses[faiss_idx], "location": loc, "score": float(distances[0][i]), "meta_row": meta})
+    return results
+
+def get_kanda_name_from_location_string(location_str: str) -> str | None:
+    """Helper to extract Kanda name from 'Kanda, Sarga, Shloka' string."""
+    try:
+        return location_str.split(',')[0].strip()
+    except IndexError:
+        return None
+
+def get_prediction_for_statement(user_statement: str) -> str:
+    """
+    Core fact-checking function. It retrieves verses, checks for relevance,
+    prompts an LLM, and parses the result into the final prediction string.
+    """
+    # Handle empty or invalid statements upfront.
+    if not isinstance(user_statement, str) or len(user_statement.strip()) < 10:
+        return "NOT RELEVANT"
+
+    # Step 1: Retrieve verses and check for relevance using a score threshold.
+    all_retrieved_verses = retrieve_top_verses(user_statement, k_retrieval=7)
+    if not all_retrieved_verses or all_retrieved_verses[0]['score'] > CONFIG['relevance_score_threshold']:
+        # If the best match is still not very similar, the statement is irrelevant.
+        return "NOT RELEVANT"
+
+    # Step 2: Prepare context for the LLM.
+    verses_for_llm = all_retrieved_verses[:5]
+    verses_section = "Relevant Ramayana Verses:\n"
+    for i, v_info in enumerate(verses_for_llm):
+        verses_section += f"{i+1}. ({v_info['location']}): \"{v_info['text']}\"\n"
+    
+    # Step 3: Construct the precise prompt for the LLM.
+    prompt_intro = "You are an expert scholar of the Valmiki Ramayana."
+    prompt_task = ("Analyze the 'User Statement' based *only* on the 'Relevant Ramayana Verses' provided. "
+                   "Your answer MUST start with one of three words: TRUE, FALSE, or UNDETERMINED. "
+                   "After the word, provide a brief explanation for your decision.")
+    full_prompt = f"[INST] {prompt_intro}\n{prompt_task}\n\n{verses_section}\nUser Statement: \"{user_statement}\"\n\nAnswer: [/INST]"
+
+    # Step 4: Query the LLM.
+    try:
+        output = llm_model(full_prompt, max_tokens=150, stop=["</s>", "[/INST]"], temperature=0.1, echo=False)
+        llm_response = output['choices'][0]['text'].strip()
+    except Exception as e:
+        print(f"Warning: LLM generation error for statement '{user_statement[:50]}...': {e}")
+        return "NOT RELEVANT" # Treat LLM errors as an inability to determine.
+
+    # Step 5: Parse the LLM response robustly.
+    match = re.search(r"\b(TRUE|FALSE|UNDETERMINED)\b", llm_response, re.IGNORECASE)
+    if match:
+        decision_str = match.group(1).upper()
+        if decision_str == "TRUE":
+            return "TRUE"
+        elif decision_str == "FALSE":
+            return "FALSE"
+        else: # Handles "UNDETERMINED"
+            return "NOT RELEVANT"
+    else:
+        # If the LLM doesn't produce one of the keywords, we can't make a determination.
+        return "NOT RELEVANT"
+
+# --- Main Execution Block ---
+if __name__ == "__main__":
+    # --- Validate Input ---
+    if len(sys.argv) != 2:
+        print(f"Usage: python {os.path.basename(__file__)} <path_to_input_csv>")
+        sys.exit(1)
+    
+    input_csv_path = sys.argv[1]
+    if not os.path.exists(input_csv_path):
+        print(f"FATAL: Input file not found at '{input_csv_path}'")
+        sys.exit(1)
+
+    # --- Run Setup ---
+    setup_models_and_data()
+
+    # --- Process Input Statements ---
+    print(f"\n--- 2. Processing statements from '{input_csv_path}' ---")
+    try:
+        input_df = pd.read_csv(input_csv_path)
+        if "Statement" not in input_df.columns:
+            print(f"FATAL: Input CSV must have a 'Statement' column.")
+            sys.exit(1)
+    except Exception as e:
+        print(f"FATAL: Could not read input CSV. Error: {e}")
+        sys.exit(1)
+
+    results_list = []
+    statements_to_process = input_df["Statement"].tolist()
+
+    for statement in tqdm(statements_to_process, desc="Fact-checking statements"):
+        prediction = get_prediction_for_statement(statement)
+        results_list.append({
+            "Statement": statement,
+            "Prediction": prediction
+        })
+
+    # --- Generate Output CSV ---
+    output_df = pd.DataFrame(results_list)
+    output_df.to_csv(CONFIG['output_csv_path'], index=False, encoding='utf-8')
+
+    print(f"\n--- 3. Processing Complete ---")
+    print(f"Output successfully saved to '{CONFIG['output_csv_path']}'")
+
+    # --- Cleanup ---
+    if llm_model is not None:
+        print("Freeing LLM resources...")
+        del llm_model
+    
+    print("Done.")
