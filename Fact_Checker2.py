@@ -1,8 +1,3 @@
-# dishasahu.py
-#
-# Final Submission for the IYD Hackathon 2025
-#
-# Description:
 # This script performs fact-checking on statements related to the Valmiki Ramayana.
 # It uses a Retrieval-Augmented Generation (RAG) pipeline.
 # 1. It downloads the necessary dataset, embeddings, and a Mistral-7B GGUF model
