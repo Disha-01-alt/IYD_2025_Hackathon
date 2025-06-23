@@ -7,10 +7,6 @@
 [![Built with](https://img.shields.io/badge/Built%20with-Python-blueviolet)](https://www.python.org/)
 [![Uses](https://img.shields.io/badge/Uses-SBERT%20%7C%20FAISS%20%7C%20Mistral%20LLM-ff69b4)](https://huggingface.co/sentence-transformers/all-mpnet-base-v2)
 [![Model Format](https://img.shields.io/badge/Model%20Format-GGUF-orange)](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Hackathon](https://imgshields.io/badge/IYD%202025-Hackathon-brightgreen)](your_hackathon_link_if_any)
-
-
 ## Project Overview & Goal
 
 In an era of pervasive information, verifying statements, especially those related to extensive and ancient texts like the Valmiki Ramayana, can be a significant challenge. Traditional methods are time-consuming and prone to human error or reliance on secondary interpretations.
