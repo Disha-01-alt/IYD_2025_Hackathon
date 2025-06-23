@@ -53,7 +53,7 @@ GGUF_MODEL_PATH = "mistral-7b-instruct-v0.2.Q4_K_M.gguf"
 # Path to save/load the pre-computed verse embeddings to speed up subsequent runs.
 EMBEDDINGS_CACHE_PATH = "ramayana_verse_embeddings_mpnet.npy"
 # Path for the output CSV file where results will be logged.
-LOG_CSV_PATH = "ramayana_fact_checker_output5.csv"
+LOG_CSV_PATH = "ramayana_fact_checker_output.csv"
 # Defines the canonical order of the Ramayana books (Kandas) for chronological sorting.
 KANDA_ORDER = [
     "Bala Kanda", "Baala Kanda", "Ayodhya Kanda", "Aranya Kanda",
