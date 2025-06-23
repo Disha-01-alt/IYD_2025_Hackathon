@@ -12,7 +12,7 @@
 # 1. Make sure you have an input CSV file (e.g., 'test_statements.csv') in the same
 #    directory. This file must have a column named "Statement".
 # 2. Run the script from your terminal:
-#    python dishasahu.py test_statements.csv
+#    python Fact_Checker.py test_statements.csv
 
 # --- Import necessary libraries ---
 import pandas as pd
