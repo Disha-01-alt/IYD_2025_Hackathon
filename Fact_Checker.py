@@ -1,31 +1,18 @@
-"""
-Overall Algorithm Outline:
-
-1.  Setup & Data Loading:
-    - Load Ramayana CSV, extract verses, and initialize Sentence Transformer for embeddings.
-    - Load/compute and cache verse embeddings using the Sentence Transformer.
-    - Build a FAISS index for efficient similarity search over verse embeddings.
-    - Load a GGUF-formatted LLM (e.g., Mistral-7B-Instruct) for fact-checking.
-
-2.  Verse Retrieval (Similarity Search):
-    - For a given user statement, generate its embedding using the Sentence Transformer.
-    - Query the FAISS index with the statement embedding to retrieve the top-K (e.g., 7) most semantically similar verses from the Ramayana, along with their locations (Kanda, Sarga, Shloka).
-
-3.  LLM-based Fact-Checking:
-    - Select a subset of retrieved verses (e.g., top 5) and format them with their locations.
-    - Construct a prompt for the LLM, instructing it to act as a Ramayana scholar and determine if the user's statement is TRUE, FALSE, or UNDETERMINED based *only* on the provided verses, and to give an explanation.
-    - Send the prompt to the GGUF LLM and get its response.
-
-4.  Response Parsing & Reference Heuristic:
-    - Parse the LLM's raw response to extract the decision (TRUE/FALSE/UNDETERMINED) and the explanation.
-    - If the decision is TRUE, apply a heuristic to select a "best" reference: iterate through verses sent to the LLM, preferring those from earlier Kandas (defined by KANDA_ORDER) and with some keyword overlap with the user statement.
-    - For FALSE/UNDETERMINED, the top FAISS-retrieved verse is typically used as the reference.
-
-5.  Logging & Output:
-    - Log the user statement, LLM's decision, explanation, selected reference verse text & location, and raw LLM response to a CSV file.
-    - Display results to the user, supporting both interactive and batch (from input CSV file) processing.
-"""
-
+# This script performs fact-checking on statements related to the Valmiki Ramayana.
+# It uses a Retrieval-Augmented Generation (RAG) pipeline.
+# 1. It downloads the necessary dataset, embeddings, and a Mistral-7B GGUF model
+#    from the 'dishasahu/ramayana-fact-checker-assets' Hugging Face repository.
+# 2. For each input statement, it retrieves the most relevant verses from the Ramayana
+#    using a FAISS vector index.
+# 3. It uses the retrieved verses as context for a Large Language Model (LLM) to
+#    determine if the statement is TRUE, FALSE, or NOT RELEVANT.
+# 4. The final predictions are saved to 'prediction_output.csv'.
+#
+# How to Run:
+# 1. Make sure you have an input CSV file (e.g., 'test_statements.csv') in the same
+#    directory. This file must have a column named "Statement".
+# 2. Run the script from your terminal:
+#    python Fact_Checker.py test_statements.csv
 
 # Import necessary libraries
 import pandas as pd
