@@ -185,3 +185,5 @@ The `Fact_Checker.py` script implements the core fact-checking pipeline primaril
 |     Process         |
 |     Complete        |
 +---------------------+
+
+FactSetu is still under active development. While the core pipeline is functional and produces reliable verdicts, we're working on improvements to enhance accuracy, scalability, and user accessibility.
